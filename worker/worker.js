@@ -3,6 +3,7 @@ const { spawn } = require('child_process');
 const fs = require('fs').promises;
 const path = require('path');
 const winston = require('winston');
+const DailyRotateFile = require('winston-daily-rotate-file'); 
 
 // 1. Configuração do Logger
 const logger = winston.createLogger({
@@ -13,7 +14,13 @@ const logger = winston.createLogger({
     ),
     transports: [
         new winston.transports.Console(),
-        new winston.transports.File({ filename: 'worker.log' })
+        new DailyRotateFile({
+            filename: 'worker-%DATE%.log', // Nome do arquivo. %DATE% será substituído pela data.
+            datePattern: 'YYYY-MM-DD',     // Formato da data. Cria um novo arquivo por dia.
+            zippedArchive: true,           // Comprime arquivos antigos em .zip.
+            maxSize: '20m',                // Rotaciona o arquivo quando ele atinge 20MB.
+            maxFiles: '14d'                // Mantém logs dos últimos 14 dias.
+        })
     ],
 });
 
@@ -26,12 +33,17 @@ async function findVideoFiles(dir) {
     const files = await fs.readdir(dir, { withFileTypes: true });
     const videoFiles = [];
 
+     const allowedExtensions = ['.mp4', '.mov', '.mkv', '.avi', '.3gp'];
+
     for (const file of files) {
         const fullPath = path.join(dir, file.name);
         if (file.isDirectory()) {
             videoFiles.push(...(await findVideoFiles(fullPath)));
-        } else if (file.isFile() && (file.name.endsWith('.mp4') || file.name.endsWith('.mov') || file.name.endsWith('.mkv'))) {
-            videoFiles.push(fullPath);
+        } else if (file.isFile()) {
+            const fileExtension = path.extname(file.name).toLowerCase();
+            if (allowedExtensions.includes(fileExtension)) {
+                videoFiles.push(fullPath);
+            }
         }
     }
     logger.info(`Found ${videoFiles.length} video files.`);
@@ -80,6 +92,7 @@ async function transcodeVideo(filePath) {
             '-y',
             '-i', filePath,
             '-c:v', 'libx264',
+            '-crf', '28',
             '-c:a', 'aac',
             '-pix_fmt', 'yuv420p',
             '-movflags', '+faststart',
