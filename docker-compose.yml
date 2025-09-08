@@ -46,15 +46,15 @@ services:
       - rabbitmq
     environment:
       - AMQP_HOST=rabbitmq
-    restart: always
+    # restart: always
     deploy:
       resources:
         limits:
           cpus: '0.5'  # Limita o uso a meio núcleo de CPU
-          memory: 512M # Limita o uso a 512 MB de memória
+          memory: 2048M # Limita o uso a 512 MB de memória
         reservations:
           cpus: '0.25' # Garante pelo menos 0.25 núcleo de CPU
-          memory: 256M # Garante pelo menos 256 MB de memória
+          memory: 1024M # Garante pelo menos 256 MB de memória
 
 volumes:
   rabbitmq_data:
