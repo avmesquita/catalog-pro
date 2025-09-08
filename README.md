@@ -42,3 +42,19 @@ To build and start your project, use:
 ```
 > docker-compose up --build -d
 ```
+
+## USE
+
+- Access your swagger (http://localhost:3000/api/) and dispatch a POST on /catalog/process or execute:
+
+```
+curl -X POST "http://localhost:3000/catalog/process"
+```
+
+- Access your videos on your browser at url http://localhost:3000/videos/
+
+
+
+
+
+
