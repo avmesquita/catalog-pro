@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Catálogo de Vídeos</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #121212;
+            color: #e0e0e0;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+            color: #ffffff;
+        }
+        #container-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+            padding: 20px;
+        }
+        .video-card {
+            background-color: #1e1e1e;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 15px;
+            transition: transform 0.2s, box-shadow 0.2s;
+            display: flex;
+            flex-direction: column;
+        }
+        .video-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+        }
+        .video-card h2 {
+            margin-top: 0;
+            font-size: 1.2em;
+            color: #4CAF50;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .video-card p {
+            margin: 5px 0;
+            font-size: 0.9em;
+            color: #b0b0b0;
+        }
+        #message {
+            text-align: center;
+            font-size: 1.2em;
+            color: #ffffff;
+        }
+        /* Player no Card */
+        .video-container {
+            position: relative;
+            width: 100%;
+            height: auto;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+        .video-container video {
+            width: 100%;
+            height: auto;
+            border-radius: 4px;
+        }
+        .modal-button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            text-align: center;
+            text-decoration: none;
+            display: block;
+            font-size: 1em;
+            margin-top: auto;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: background-color 0.3s;
+        }
+        .modal-button:hover {
+            background-color: #45a049;
+        }
+        
+        /* Controles de Paginação */
+        #pagination-controls {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-top: 20px;
+            gap: 10px;
+        }
+        .page-button {
+            background-color: #2c2c2c;
+            color: #ffffff;
+            border: 1px solid #555;
+            padding: 10px 15px;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: background-color 0.3s;
+        }
+        .page-button:hover:not(:disabled) {
+            background-color: #4CAF50;
+        }
+        .page-button:disabled {
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+        #page-info {
+            font-size: 1.2em;
+            color: #ffffff;
+        }
+
+        /* Modal e Player (inalterados) */
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.9);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        .modal-content {
+            position: relative;
+            background-color: #2c2c2c;
+            padding: 20px;
+            border-radius: 8px;
+            width: 90%;
+            max-width: 900px;
+        }
+        .modal-content video {
+            width: 100%;
+            height: auto;
+            border-radius: 8px;
+        }
+        .close-button {
+            position: absolute;
+            top: 10px;
+            right: 15px;
+            font-size: 30px;
+            font-weight: bold;
+            color: #fff;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Catálogo de Vídeos</h1>
+    <div id="message">Carregando catálogo...</div>
+    <div id="container-cards"></div>
+    <div id="pagination-controls" style="display: none;">
+        <button id="prev-btn" class="page-button">Anterior</button>
+        <span id="page-info"></span>
+        <button id="next-btn" class="page-button">Próximo</button>
+    </div>
+
+    <div id="video-modal" class="modal">
+        <span class="close-button">&times;</span>
+        <div class="modal-content">
+            <video id="video-player" controls autoplay></video>
+        </div>
+    </div>
+
+    <script>
+        // Variáveis de estado da paginação
+        let videoData = [];
+        let currentPage = 1;
+        const videosPerPage = 6;
+
+        // Elementos da DOM
+        const container = document.getElementById('container-cards');
+        const message = document.getElementById('message');
+        const paginationControls = document.getElementById('pagination-controls');
+        const prevBtn = document.getElementById('prev-btn');
+        const nextBtn = document.getElementById('next-btn');
+        const pageInfo = document.getElementById('page-info');
+
+        // Função utilitária para formatar o tamanho do arquivo
+        function formatBytes(bytes, decimals = 2) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const dm = decimals < 0 ? 0 : decimals;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+        }
+
+        // --- Lógica de renderização dos vídeos ---
+        function renderPage() {
+            container.innerHTML = '';
+            
+            const startIndex = (currentPage - 1) * videosPerPage;
+            const endIndex = startIndex + videosPerPage;
+            const videosToDisplay = videoData.slice(startIndex, endIndex);
+
+            if (videosToDisplay.length === 0 && currentPage > 1) {
+                 currentPage--;
+                 renderPage();
+                 return;
+            }
+            
+            videosToDisplay.forEach(video => {
+                const card = document.createElement('div');
+                card.classList.add('video-card');
+
+                // A URL do vídeo agora é baseada no ID único
+                //const videoUrl = `http://localhost:3000/videos/${encodeURIComponent(video.filename)}`;
+                const videoUrl = `http://localhost:3000/catalog/stream?id=${video.id}`;
+
+                const videoContainer = document.createElement('div');
+                videoContainer.classList.add('video-container');
+
+                const cardVideo = document.createElement('video');
+                cardVideo.src = videoUrl;
+                cardVideo.controls = true;
+                cardVideo.preload = 'metadata';
+
+                const filename = document.createElement('h2');
+                filename.textContent = video.filename;
+
+                const fileType = document.createElement('p');
+                fileType.textContent = `Tipo: ${video.fileType}`;
+                
+                const fileSize = document.createElement('p');
+                fileSize.textContent = `Tamanho: ${formatBytes(video.fileSize)}`;
+
+                const fileDateTime = document.createElement('p');
+                const date = new Date(video.fileDateTime);
+                fileDateTime.textContent = `Data: ${date.toLocaleString()}`;
+
+                const modalButton = document.createElement('button');
+                modalButton.classList.add('modal-button');
+                modalButton.textContent = 'Abrir em Tela Cheia';
+
+                modalButton.addEventListener('click', () => {
+                    openVideoModal(videoUrl);
+                });
+
+                videoContainer.appendChild(cardVideo);
+                card.appendChild(videoContainer);
+                card.appendChild(filename);
+                card.appendChild(fileType);
+                card.appendChild(fileSize);
+                card.appendChild(fileDateTime);
+                card.appendChild(modalButton);
+
+                container.appendChild(card);
+            });
+
+            updatePaginationControls();
+        }
+
+        // --- Lógica dos Controles de Paginação ---
+        function updatePaginationControls() {
+            const totalPages = Math.ceil(videoData.length / videosPerPage);
+            pageInfo.textContent = `Página ${currentPage} de ${totalPages}`;
+            
+            prevBtn.disabled = (currentPage === 1);
+            nextBtn.disabled = (currentPage === totalPages);
+        }
+
+        async function fetchAndRenderAllVideos() {
+            try {
+                const response = await fetch('http://localhost:3000/catalog/videos');
+                if (!response.ok) {
+                    throw new Error(`Erro na API: ${response.status} ${response.statusText}`);
+                }
+                videoData = await response.json();
+
+                if (videoData.length === 0) {
+                    message.textContent = 'Nenhum vídeo encontrado no catálogo.';
+                    return;
+                }
+
+                message.style.display = 'none';
+                paginationControls.style.display = 'flex';
+                renderPage();
+
+            } catch (error) {
+                console.error('Erro ao buscar os vídeos:', error);
+                message.textContent = `Erro ao carregar os dados: ${error.message}`;
+                message.style.color = 'red';
+            }
+        }
+
+        prevBtn.addEventListener('click', () => {
+            if (currentPage > 1) {
+                currentPage--;
+                renderPage();
+            }
+        });
+
+        nextBtn.addEventListener('click', () => {
+            const totalPages = Math.ceil(videoData.length / videosPerPage);
+            if (currentPage < totalPages) {
+                currentPage++;
+                renderPage();
+            }
+        });
+
+        // --- Lógica do Modal e Player (inalterada) ---
+        const videoModal = document.getElementById('video-modal');
+        const videoPlayer = document.getElementById('video-player');
+        const closeButton = document.querySelector('.close-button');
+
+        function openVideoModal(videoPath) {
+            videoPlayer.src = videoPath;
+            videoModal.style.display = 'flex';
+        }
+
+        function closeVideoModal() {
+            videoPlayer.pause();
+            videoPlayer.src = '';
+            videoModal.style.display = 'none';
+        }
+
+        closeButton.addEventListener('click', closeVideoModal);
+        window.addEventListener('click', (event) => {
+            if (event.target === videoModal) {
+                closeVideoModal();
+            }
+        });
+
+        fetchAndRenderAllVideos();
+    </script>
+</body>
+</html>

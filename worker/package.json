@@ -1,0 +1,16 @@
+{
+  "name": "worker",
+  "version": "1.0.0",
+  "description": "Consume THE MESSAGE and use FFmpeg to transcode THE VIDEO",
+  "license": "ISC",
+  "author": "Andre Mesquita",
+  "type": "commonjs",
+  "main": "worker.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.9",
+    "winston": "^3.17.0"
+  }
+}

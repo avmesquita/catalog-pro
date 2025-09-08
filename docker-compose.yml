@@ -1,0 +1,68 @@
+# version: '3.8'
+
+services:
+  # Serviço do RabbitMQ
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: rabbitmq
+    ports:
+      - "5672:5672" # Porta de comunicação AMQP
+      - "15672:15672" # Porta da interface de gerenciamento web
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq/
+      - rabbitmq_logs:/var/log/rabbitmq/
+    restart: always
+
+  # Serviço da API NestJS
+  nestjs_app:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: nestjs_app
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./api:/app
+      - /app/node_modules
+      - /app/dist
+      - videos:/videos # Monta o volume de vídeos
+      - db_data:/app/database
+    depends_on:
+      - rabbitmq # Garante que o RabbitMQ suba primeiro
+    environment:
+      - AMQP_HOST=rabbitmq # Usa o nome do serviço como host
+    restart: always
+
+  # Serviço do Worker
+  worker_app:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: worker_app
+    volumes:
+      - videos:/videos # Monta o volume de vídeos para o worker
+    depends_on:
+      - rabbitmq
+    environment:
+      - AMQP_HOST=rabbitmq
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'  # Limita o uso a meio núcleo de CPU
+          memory: 512M # Limita o uso a 512 MB de memória
+        reservations:
+          cpus: '0.25' # Garante pelo menos 0.25 núcleo de CPU
+          memory: 256M # Garante pelo menos 256 MB de memória
+
+volumes:
+  rabbitmq_data:
+  rabbitmq_logs:
+  videos:
+    driver: local
+    driver_opts:
+      type: 'none'
+      o: 'bind'
+      device: '/media/avmesquita/DADOS/_album/Videos' # <-- ALtere para o seu diretório real
+  db_data:
+
