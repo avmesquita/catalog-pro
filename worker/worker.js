@@ -45,6 +45,7 @@ async function findVideoFiles(dir) {
 
 // Função para enviar uma mensagem de transcodificação para a fila
 async function sendTranscodeRequest(filePath) {
+    logger.info('File sent to sendTranscodeRequest', filePath);    
     if (!channel) {
         logger.error('Worker: RabbitMQ channel is not available.');
         return;
@@ -54,40 +55,98 @@ async function sendTranscodeRequest(filePath) {
     logger.info(`[x] Sent transcode request`, { filePath });
 }
 
+async function sendDbUpdateRequest(videoData) {
+    if (!channel) {
+        logger.error('Worker: Canal do RabbitMQ não está disponível.');
+        return;
+    }
+    const msg = { task: 'save_video_metadata', data: videoData };
+    // AQUI: Envia para a nova fila 'db_queue'
+    channel.sendToQueue('db_queue', Buffer.from(JSON.stringify(msg)));
+    logger.info(`[x] Sent DB update request`, { videoData });
+}
+
 // Função para transcodificar um vídeo (lógica do FFmpeg)
 async function transcodeVideo(filePath) {
     logger.info(`[x] Starting transcoding`, { filePath });
+
+    const transcodedPath = getTranscodedPath(filePath);
+    logger.info(`[x] Transcoding to: ${transcodedPath}`);
+
+    // Cria os diretórios recursivamente para garantir que o caminho exista
+    await fs.mkdir(path.dirname(transcodedPath), { recursive: true });
+
     return new Promise((resolve, reject) => {
-        const fileStream = createReadStream(filePath);
-        const ffmpeg = spawn('ffmpeg', [
-            '-loglevel', 'error',
-            '-nostdin',
-            '-probesize', '5M',
-            '-i', 'pipe:0',
-            '-movflags', 'frag_keyframe+empty_moov',
-            '-c:v', 'libx264',
-            '-c:a', 'aac',
-            '-f', 'mp4',
-            'pipe:1',
-        ]);
-        
-        fileStream.pipe(ffmpeg.stdin);
-        
-        ffmpeg.on('close', (code) => {
-            if (code === 0) {
-                logger.info(`[x] Transcoding finished`, { filePath });
-                resolve();
-            } else {
-                logger.error(`[!] FFmpeg exited with code ${code}`, { filePath });
-                reject(new Error(`FFmpeg exited with code ${code}`));
-            }
-        });
-        
-        ffmpeg.on('error', (err) => {
-            logger.error(`[!] FFmpeg process error`, { filePath, error: err.message });
+
+        try {
+            const fileStream = createReadStream(filePath);
+            const ffmpeg = spawn('ffmpeg', [
+                '-report', // <--- Adicione esta flag para criar um log detalhado
+                '-y', // <--- Overwrite output file without asking
+                '-i', filePath, // <--- Entrada direta do arquivo
+                '-c:v', 'libx264',
+                '-c:a', 'aac',
+                '-pix_fmt', 'yuv420p', // <--- Add this for wider compatibility
+                '-movflags', '+faststart', // <--- Optimize for web streaming
+                transcodedPath // <--- Saída do arquivo transcodificado
+            ]);        
+
+            // Trata a saída e o erro para evitar bloqueios
+            ffmpeg.stdout.on('data', (data) => { /* ignore */ });
+            ffmpeg.stderr.on('data', (data) => {
+                logger.error(`[!] FFmpeg stderr: ${data.toString()}`, { filePath });
+            });
+            
+            fileStream.pipe(ffmpeg.stdin);
+
+            ffmpeg.on('message', (msg) => {
+                logger.log('ffmped :: message event :: ', msg);
+            });
+
+            ffmpeg.on('exit', (code, signal) => {
+                logger.log('ffmped :: exit event :: ', code, signal);
+            });
+
+            ffmpeg.on('close', (code) => {
+                if (code === 0) {
+                    logger.info(`[x] Transcoding finished`, { filePath });
+                    // Envia a mensagem de sucesso para a fila de retorno
+                    sendDbUpdateRequest({ status: 'completed', originalPath: filePath });
+                    resolve();
+                } else {
+                    logger.error(`[!] FFmpeg exited with code ${code}`, { filePath });
+                    // Envia a mensagem de falha para a fila de retorno
+                    sendDbUpdateRequest({ status: 'failed', originalPath: filePath, error: `FFmpeg exited with code ${code}` });
+                    reject(new Error(`FFmpeg exited with code ${code}`));                
+                }
+            });
+
+            ffmpeg.on('error', (err) => {
+                logger.error(`[!] FFmpeg process error`, { filePath, error: err.message });
+                sendDbUpdateRequest({ status: 'failed', originalPath: filePath, error: err.message });
+                reject(err);
+            });            
+        } catch (error) {
+            logger.error("transcodeVideo error ", error);
             reject(err);
-        });
+        }
     });
+}
+
+// Função para gerar o caminho de saída no novo volume
+function getTranscodedPath(originalPath) {
+    // 1. Pega o diretório e o nome do arquivo do caminho original
+    const originalDir = path.dirname(originalPath); // Ex: /videos/2012/05
+    const originalFilename = path.basename(originalPath); // Ex: video-2012-05-13-08-44-46.mp4
+    
+    // 2. Cria um novo caminho base a partir do volume de saída
+    const transcodedBaseDir = '/transcoded_videos';
+    const relativePath = path.relative('/videos', originalDir); // Pega a parte relativa do caminho: 2012/05
+    
+    // 3. Junta tudo para formar o caminho final
+    const finalPath = path.join(transcodedBaseDir, relativePath, originalFilename);
+    
+    return finalPath;
 }
 
 // Função principal que consome as mensagens
@@ -98,6 +157,7 @@ async function startWorker() {
         channel = await connection.createChannel();
         const queueName = 'transcode_queue';
         await channel.assertQueue(queueName, { durable: true });
+        await channel.assertQueue('db_queue', { durable: true });
         logger.info(`[*] Waiting for messages in ${queueName}.`);
 
         // 2. Tratamento de Erros no Canal
@@ -116,7 +176,8 @@ async function startWorker() {
                         logger.info('Received request to process directory.');
                         const videoDir = '/videos'; 
                         const videoFiles = await findVideoFiles(videoDir);
-                        for (const file of videoFiles) {
+                        logger.info("Total videos found = ", videoFiles.length);
+                        for (const file of videoFiles) {                            
                             await sendTranscodeRequest(file);
                         }
                     } else if (data.task === 'transcode_video') {

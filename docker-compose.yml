@@ -41,6 +41,7 @@ services:
     container_name: worker_app
     volumes:
       - videos:/videos # Monta o volume de vídeos para o worker
+      - transcoded_videos:/transcoded_videos # <--- Novo volume de saída
     depends_on:
       - rabbitmq
     environment:
@@ -64,5 +65,10 @@ volumes:
       type: 'none'
       o: 'bind'
       device: '/media/avmesquita/DADOS/_album/Videos' # <-- ALtere para o seu diretório real
+  transcoded_videos:
+    driver: local
+    driver_opts:
+      type: 'none'
+      o: 'bind'
+      device: '/media/avmesquita/DADOS/_album/Transcoded'      
   db_data:
-

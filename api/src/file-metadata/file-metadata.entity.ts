@@ -19,4 +19,7 @@ export class FileMetadata {
 
   @Column()
   fileSize: number;
+
+  @Column({ default: 'processing' })
+  status: string;   
 }

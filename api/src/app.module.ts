@@ -6,6 +6,7 @@ import { FileMetadata } from './file-metadata/file-metadata.entity';
 import { CatalogModule } from './catalog/catalog.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { DbConsumerModule } from './db-consumer/db-consumer.module';
 
 @Module({
   imports: [
@@ -19,7 +20,8 @@ import { AppService } from './app.service';
       rootPath: join(__dirname, 'videos'),
       serveRoot: '/videos'
     }),
-    CatalogModule    
+    CatalogModule,
+    DbConsumerModule
   ],
   controllers: [AppController],
   providers: [AppService],  

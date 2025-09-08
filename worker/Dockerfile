@@ -3,7 +3,7 @@ FROM node:18
 
 # Instala FFmpeg
 #RUN apk add --no-cache ffmpeg
-RUN apt-get update && apt-get install -y ffmpeg
+RUN apt-get update && apt-get install -y ffmpeg libavcodec-extra
 
 # Define o diretório de trabalho no container
 WORKDIR /app
