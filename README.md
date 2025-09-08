@@ -35,7 +35,7 @@ It was designed for use with Docker to orchestrate the application layers.
       device: '/media/avmesquita/DADOS/_album/Transcoded'
 ```
 
-## START
+## BUILD & START
 
 To build and start your project, use:
 
