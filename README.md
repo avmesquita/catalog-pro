@@ -18,7 +18,7 @@ The solution currently has three layers:
 
 2. API and Frontend: The code was built in NestJS, with Swagger to persist data in an SQLite database, which will also facilitate reading by a file indexer. NestJS was also chosen to serve the HTML file with the ServeStatic module.
 
-3. Worker: The worker is responsible for handling processing requests from the broker, transcoding videos, and listing folders for processing, without burdening the API.
+3. Worker: The worker is responsible for handling processing requests from the broker, transcoding videos, and listing folders for processing, without burdening the API. This was build in NodeJs.
 
 It was designed for use with Docker to orchestrate the application layers.
 
