@@ -35,7 +35,7 @@ It was designed for use with Docker to orchestrate the application layers.
       device: '/media/avmesquita/DADOS/_album/Transcoded'
 ```
 
-P.S: 'videos' volume is used to input and 'transcoded_videos' is to output files.
+P.S: 'videos' volume is used to input and 'transcoded_videos' is used to output files.
 
 ## BUILD & START
 
