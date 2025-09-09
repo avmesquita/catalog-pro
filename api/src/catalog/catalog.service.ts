@@ -15,7 +15,7 @@ export class CatalogService implements OnModuleInit {
     @InjectRepository(FileMetadata)
     private fileMetadataRepository: Repository<FileMetadata>    
   ) {
-    this.logger.log('CatalogService: Construtor chamado.');
+    this.logger.log('CatalogService: Injected!');
   }
 
   async onModuleInit() {

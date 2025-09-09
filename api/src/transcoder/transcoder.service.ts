@@ -7,7 +7,7 @@ export class TranscoderService implements OnModuleInit {
   private readonly logger = new Logger(TranscoderService.name);
 
   constructor() {
-    console.log('TranscoderService: Construtor chamado.');
+    console.log('TranscoderService: Injected!');
   }
 
   async onModuleInit() {
