@@ -103,7 +103,7 @@ async function transcodeVideo(filePath, transcodedPath) {
         const timeoutInMs = (duration * 1.5) * 1000; // 1.5x a duração do vídeo em milissegundos
 
         const timeout = setTimeout(() => {
-            logger.error(`[!] FFmpeg process for ${filePath} timed out after 4 hours. Killing process.`);
+            logger.error(`[!] FFmpeg process for ${filePath} timed out after calcultated time based on file. Killing process.`);
             ffmpeg.kill('SIGKILL');
             reject(new Error(`FFmpeg process for ${filePath} timed out.`));
         }, timeoutInMs); // 4 horas em milissegundos
