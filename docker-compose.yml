@@ -12,6 +12,8 @@ services:
       - rabbitmq_data:/var/lib/rabbitmq/
       - rabbitmq_logs:/var/log/rabbitmq/
     restart: always
+    networks:
+      - video-transcoder
 
   # Serviço da API NestJS
   nestjs_app:
@@ -25,13 +27,24 @@ services:
       - ./api:/app
       - /app/node_modules
       - /app/dist
-      - videos:/videos # Monta o volume de vídeos
+      # - videos:/videos # Monta o volume de vídeos
       - db_data:/app/database
+      - transcoded_videos:/transcoded_videos
     depends_on:
       - rabbitmq # Garante que o RabbitMQ suba primeiro
+      #  condition: service_healthy
     environment:
       - AMQP_HOST=rabbitmq # Usa o nome do serviço como host
     restart: always
+    networks:
+      - video-transcoder
+    #healthcheck:
+    #  # Verificação de saúde da API, por exemplo, testando uma rota de status
+    #  # O comando exato depende da sua API, mas um teste de porta é genérico
+    #  test: ["CMD-SHELL", "wget --spider http://localhost:3000/api/health || exit 1"]
+    #  interval: 30s
+    #  timeout: 10s
+    #  retries: 5
 
   # Serviço do Worker
   worker_app:
@@ -46,7 +59,8 @@ services:
       - rabbitmq
     environment:
       - AMQP_HOST=rabbitmq
-    # restart: always
+      - RABBITMQ_HEARTBEAT=60
+    #restart: always # Desabilitado enquanto em processo de desenvolvimento para conseguir obter as quebras de execução
     deploy:
       resources:
         limits:
@@ -55,6 +69,14 @@ services:
         reservations:
           cpus: '0.25' # Garante pelo menos 0.25 núcleo de CPU
           memory: 1024M # Garante pelo menos 256 MB de memória
+    networks:
+      - video-transcoder
+    #healthcheck:
+    #  test: ["CMD-SHELL", "node -e 'require(\"amqplib\").connect(\"amqp://rabbitmq\").then(c => c.close())' || exit 1"]
+    #  interval: 60s
+    #  timeout: 20s
+    #  retries: 3
+    #  start_period: 30s
 
 volumes:
   rabbitmq_data:
@@ -72,3 +94,7 @@ volumes:
       o: 'bind'
       device: '/media/avmesquita/DADOS/_album/Transcoded'
   db_data:
+
+networks:
+  video-transcoder:
+    driver: bridge

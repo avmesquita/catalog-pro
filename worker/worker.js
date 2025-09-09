@@ -1,11 +1,10 @@
 const amqp = require('amqplib');
-const { spawn } = require('child_process');
+const { spawn, exec } = require('child_process');
 const fs = require('fs').promises;
 const path = require('path');
 const winston = require('winston');
-const DailyRotateFile = require('winston-daily-rotate-file'); 
+const os = require('os');
 
-// 1. Configuração do Logger
 const logger = winston.createLogger({
     level: 'info',
     format: winston.format.combine(
@@ -14,35 +13,55 @@ const logger = winston.createLogger({
     ),
     transports: [
         new winston.transports.Console(),
-        new DailyRotateFile({
-            filename: 'worker-%DATE%.log', // Nome do arquivo. %DATE% será substituído pela data.
-            datePattern: 'YYYY-MM-DD',     // Formato da data. Cria um novo arquivo por dia.
-            zippedArchive: true,           // Comprime arquivos antigos em .zip.
-            maxSize: '20m',                // Rotaciona o arquivo quando ele atinge 20MB.
-            maxFiles: '14d'                // Mantém logs dos últimos 14 dias.
-        })
+        new winston.transports.File({ filename: 'worker.log' })
     ],
 });
 
 let connection;
 let channel;
+const videoDir = '/videos';
 
-// Função de escaneamento de diretórios
+function getVideoDuration(filePath) {
+    return new Promise((resolve, reject) => {
+        exec(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`, (error, stdout, stderr) => {
+            if (error) {
+                reject(error);
+                return;
+            }
+            const duration = parseFloat(stdout);
+            resolve(duration);
+        });
+    });
+}
+
 async function findVideoFiles(dir) {
     logger.info('Starting directory scan', { directory: dir });
     const files = await fs.readdir(dir, { withFileTypes: true });
     const videoFiles = [];
-
-     const allowedExtensions = ['.mp4', '.mov', '.mkv', '.avi', '.3gp'];
+    const allowedExtensions = ['.mp4', '.mov', '.mkv', '.avi', '.3gp'];
 
     for (const file of files) {
         const fullPath = path.join(dir, file.name);
+
         if (file.isDirectory()) {
             videoFiles.push(...(await findVideoFiles(fullPath)));
         } else if (file.isFile()) {
             const fileExtension = path.extname(file.name).toLowerCase();
             if (allowedExtensions.includes(fileExtension)) {
-                videoFiles.push(fullPath);
+                try {
+                    const fileStat = await fs.stat(fullPath);
+                    const fileData = {
+                        originalPath: fullPath,
+                        filename: file.name,
+                        fileType: fileExtension.substring(1),
+                        fileSize: fileStat.size,
+                        fileDateTime: fileStat.mtime.toISOString(),
+                        status: 'pending'
+                    };
+                    videoFiles.push(fileData);
+                } catch (err) {
+                    logger.error(`[!] Failed to get file stats for ${fullPath}`, { error: err.message });
+                }
             }
         }
     }
@@ -50,33 +69,14 @@ async function findVideoFiles(dir) {
     return videoFiles;
 }
 
-// Função para enviar uma mensagem de transcodificação para a fila
-async function sendTranscodeRequest(filePath) {
-    if (!channel) {
-        logger.error('Worker: RabbitMQ channel is not available.');
-        return;
-    }
-    const msg = { task: 'transcode_video', filePath: filePath };
-    channel.sendToQueue('transcode_queue', Buffer.from(JSON.stringify(msg)));
-    logger.info(`[x] Sent transcode request`, { filePath });
+function getTranscodedPath(originalPath) {
+    const relativePath = path.relative(videoDir, originalPath);
+    const transcodedDir = '/transcoded_videos';
+    return path.join(transcodedDir, relativePath);
 }
 
-// Função para enviar uma atualização de status para a fila do banco de dados
-async function sendDbUpdateRequest(videoData) {
-    if (!channel) {
-        logger.error('Worker: Canal do RabbitMQ não está disponível.');
-        return;
-    }
-    const msg = { task: 'save_video_metadata', data: videoData };
-    channel.sendToQueue('db_queue', Buffer.from(JSON.stringify(msg)));
-    logger.info(`[x] Sent DB update request`, { videoData });
-}
-
-// Função para transcodificar um vídeo (lógica do FFmpeg)
-async function transcodeVideo(filePath) {
+async function transcodeVideo(filePath, transcodedPath) {
     logger.info(`[x] Starting transcoding`, { filePath });
-
-    const transcodedPath = getTranscodedPath(filePath);
     logger.info(`[x] Transcoding to: ${transcodedPath}`);
 
     try {
@@ -86,7 +86,7 @@ async function transcodeVideo(filePath) {
         throw err;
     }
 
-    return new Promise((resolve, reject) => {
+    return new Promise( async(resolve, reject) => {
         const ffmpeg = spawn('ffmpeg', [
             '-report',
             '-y',
@@ -99,118 +99,154 @@ async function transcodeVideo(filePath) {
             transcodedPath
         ]);
 
+        const duration = await getVideoDuration(filePath);
+        const timeoutInMs = (duration * 1.5) * 1000; // 1.5x a duração do vídeo em milissegundos
+
+        const timeout = setTimeout(() => {
+            logger.error(`[!] FFmpeg process for ${filePath} timed out after calcultated time based on file. Killing process.`);
+            ffmpeg.kill('SIGKILL');
+            reject(new Error(`FFmpeg process for ${filePath} timed out.`));
+        }, timeoutInMs); // 4 horas em milissegundos
+
         ffmpeg.stderr.on('data', (data) => {
-            logger.error(`[!] FFmpeg stderr: ${data.toString()}`, { filePath });
+            logger.info(data.toString().trim());
         });
-        
-        ffmpeg.on('close', (code) => {
+
+        ffmpeg.on('close', async (code) => {
             if (code === 0) {
-                logger.info(`[x] Transcoding finished`, { filePath });
-                sendDbUpdateRequest({ status: 'completed', originalPath: filePath, transcodedPath: transcodedPath });
-                resolve();
+                try {
+                    const stats = await fs.stat(transcodedPath);
+                    if (stats.size > 0) {
+                        logger.info(`[x] Transcoding finished successfully for ${filePath}`);
+                        resolve();
+                    } else {
+                        const errorMessage = `[!] Transcoded file is 0 bytes for ${filePath}`;
+                        logger.error(errorMessage);
+                        reject(new Error(errorMessage));
+                    }
+                } catch (err) {
+                    const errorMessage = `[!] Failed to get file stats after transcoding for ${filePath}`;
+                    logger.error(errorMessage, { error: err.message });
+                    reject(new Error(errorMessage));
+                }
             } else {
-                logger.error(`[!] FFmpeg exited with code ${code}`, { filePath });
-                sendDbUpdateRequest({ status: 'failed', originalPath: filePath, error: `FFmpeg exited with code ${code}` });
-                reject(new Error(`FFmpeg exited with code ${code}`));                
+                logger.error(`[!] FFmpeg exited with code ${code} for ${filePath}`);
+                reject(new Error(`FFmpeg exited with code ${code}`));
             }
         });
 
         ffmpeg.on('error', (err) => {
-            logger.error(`[!] FFmpeg process error`, { filePath, error: err.message });
-            sendDbUpdateRequest({ status: 'failed', originalPath: filePath, error: err.message });
+            logger.error(`[!] Failed to start FFmpeg process for ${filePath}`, { error: err.message });
             reject(err);
         });
     });
 }
 
-// Função para gerar o caminho de saída no novo volume
-function getTranscodedPath(originalPath) {
-    const originalDir = path.dirname(originalPath);
-    const originalFilename = path.basename(originalPath);
-    const transcodedBaseDir = '/transcoded_videos';
-    const relativePath = path.relative('/videos', originalDir);
-    const finalPath = path.join(transcodedBaseDir, relativePath, originalFilename);
-    return finalPath;
+async function sendDbCreateRequest(videoData) {
+    if (!channel) return;
+    const msg = { task: 'create_metadata', data: videoData };
+    channel.sendToQueue('db_queue', Buffer.from(JSON.stringify(msg)));
+    logger.info(`[x] Sent DB create request`, { videoData });
 }
 
-// Função principal que consome as mensagens
+async function sendDbUpdateRequest(dbId, status, transcodedPath) {
+    if (!channel) return;
+    const msg = { task: 'update_metadata', data: { dbId, status, transcodedPath } };
+    channel.sendToQueue('db_queue', Buffer.from(JSON.stringify(msg)));
+    logger.info(`[x] Sent DB update request`, { dbId, status, transcodedPath });
+}
+
 async function startWorker() {
     let connected = false;
-    let attempts = 0;
-    const maxAttempts = 10;
-    const retryDelay = 5000;
+    let retries = 0;
+    const maxRetries = 10;
+    const retryInterval = 5000;
 
-    while (!connected && attempts < maxAttempts) {
-        attempts++;
+    const connectToRabbitMQ = async () => {
         try {
-            logger.info(`Worker starting... (Attempt ${attempts} of ${maxAttempts})`);
+            logger.info('Worker: Tentando conectar ao RabbitMQ...');
             connection = await amqp.connect('amqp://rabbitmq:5672');
             channel = await connection.createChannel();
-            
-            channel.on('error', (err) => {
-                logger.error('Channel error', { error: err.message });
+            await channel.assertQueue('transcode_queue', { durable: true });
+            await channel.assertQueue('db_queue', { durable: true });
+            logger.info('Worker: Conexão com RabbitMQ estabelecida e filas verificadas.');
+
+            // Event listener para lidar com a queda da conexão
+            connection.on('error', (err) => {
+                logger.error('Connection error. Attempting to reconnect...', { error: err.message });
+                if (!connection.closing) {
+                    process.exit(1); // Sai para que o Docker possa reiniciar o contêiner
+                }
             });
-            
-            connected = true;
-            logger.info('Connection to RabbitMQ established successfully.');
+            return true;
         } catch (error) {
-            logger.error(`Failed to connect to RabbitMQ. Retrying in ${retryDelay / 1000}s...`, { error: error.message });
-            await new Promise(resolve => setTimeout(resolve, retryDelay));
+            retries++;
+            logger.error(`Falha na conexão com RabbitMQ. Tentativa ${retries}/${maxRetries}.`, { error: error.message });
+            await new Promise(res => setTimeout(res, retryInterval));
+            return false;
         }
+    };
+
+    while (!connected && retries < maxRetries) {
+        connected = await connectToRabbitMQ();
     }
 
     if (!connected) {
-        logger.error('Failed to connect to RabbitMQ after multiple attempts. Exiting...');
+        logger.error('Não foi possível conectar ao RabbitMQ após várias tentativas. Encerrando.');
         process.exit(1);
     }
 
-    // AQUI: Limite o número de mensagens não confirmadas para 1 por vez
-    await channel.prefetch(1);
-                
-    const queueName = 'transcode_queue';
-    await channel.assertQueue(queueName, { durable: true });
-    await channel.assertQueue('db_queue', { durable: true });
-    logger.info(`[*] Waiting for messages in ${queueName}.`);
+    const concurrencyLimit = os.cpus().length > 2 ? os.cpus().length - 1 : 1;
+    let activeJobs = 0;
+    
+    const consumerOptions = {
+        noAck: false,
+        consumer_timeout: 3600000 * 2
+    };
 
-    channel.consume(queueName, async (msg) => {
+    channel.consume('transcode_queue', async (msg) => {
         if (msg !== null) {
+            if (activeJobs >= concurrencyLimit) {
+                logger.info(`Concurrency limit reached (${activeJobs}/${concurrencyLimit}). Re-queuing message.`);
+                channel.nack(msg, false, true);
+                return;
+            }
+
             const data = JSON.parse(msg.content.toString());
-            logger.info(`[x] Received job`, { data });
+            logger.info(`[x] Received job from transcode_queue. Starting job ${activeJobs + 1}/${concurrencyLimit}`, { data });
             
+            activeJobs++;
+
             try {
                 if (data.task === 'process_directory') {
                     logger.info('Received request to process directory.');
-                    const videoDir = '/videos'; 
                     const videoFiles = await findVideoFiles(videoDir);
-                    logger.info("Total videos found = ", videoFiles.length);
-                    for (const file of videoFiles) {
-                        await sendTranscodeRequest(file);
+                    logger.info(`Total videos found = ${videoFiles.length}`);
+
+                    for (const fileData of videoFiles) {
+                        await sendDbCreateRequest(fileData);
                     }
                 } else if (data.task === 'transcode_video') {
-                    const filePath = data.filePath;
-                    await transcodeVideo(filePath);
+                    const { dbId, originalPath } = data;
+                    const transcodedPath = getTranscodedPath(originalPath);
+                    
+                    await transcodeVideo(originalPath, transcodedPath);
+                    
+                    await sendDbUpdateRequest(dbId, 'completed', transcodedPath);
+
                 } else {
                     logger.warn(`[!] Unknown task received`, { data });
                 }
-            } catch (error) {
-                logger.error('Error processing job', { error: error.message, data });
-                logger.error('Stack Trace:', error.stack);
-            } finally {
                 channel.ack(msg);
+            } catch (error) {
+                logger.error('Error processing job. Message will NOT be re-queued.', { error: error.message, data });
+                await sendDbUpdateRequest(data.dbId, 'failed', null);
+                channel.nack(msg, false, false);
+            } finally {
+                activeJobs--;
             }
         }
-    }, { noAck: false });
+    }, consumerOptions);
 }
-
-// 3. Tratamento de Erros Globais
-process.on('unhandledRejection', (reason, promise) => {
-    logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
-    process.exit(1);
-});
-
-process.on('uncaughtException', (error) => {
-    logger.error('Uncaught Exception:', error);
-    process.exit(1);
-});
 
 startWorker();

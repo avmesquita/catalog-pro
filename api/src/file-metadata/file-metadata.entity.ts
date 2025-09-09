@@ -9,6 +9,9 @@ export class FileMetadata {
   originalPath: string;
 
   @Column()
+  transcodedPath: string;
+
+  @Column()
   filename: string;
 
   @Column()
